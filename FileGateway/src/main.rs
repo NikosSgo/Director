@@ -1,5 +1,5 @@
 mod service;
-mod storage;
+pub mod storage;
 
 use tonic::transport::Server;
 use tracing::info;
