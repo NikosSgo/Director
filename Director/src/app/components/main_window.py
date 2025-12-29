@@ -106,6 +106,7 @@ class MainWindow(QMainWindow, QtDisposableMixin):
         self._stack.setCurrentIndex(0)
         
         if self._editor:
+            self._editor.cleanup()  # Сохраняем проект перед закрытием
             self._stack.removeWidget(self._editor)
             self._editor.deleteLater()
             self._editor = None
@@ -141,6 +142,8 @@ class MainWindow(QMainWindow, QtDisposableMixin):
                 event.ignore()
                 return
 
+        if self._editor:
+            self._editor.cleanup()
         self._project_hub.cleanup()
         self.dispose_all()
         self._store.dispose()

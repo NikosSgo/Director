@@ -32,21 +32,28 @@ class ProjectData:
     def load(self) -> bool:
         """Загрузить данные проекта с сервера."""
         if not self._gateway:
+            print("[ProjectData] No gateway")
             return False
         
         try:
+            print(f"[ProjectData] Loading from: {self._project_path}")
+            
             # Скачиваем project.json
             response = self._gateway.browse_directory(self._project_path)
+            print(f"[ProjectData] Browse response success: {response.success}")
+            
             if not response.success:
+                print(f"[ProjectData] Browse failed: {response.error_message}")
                 return False
             
             # Проверяем есть ли project.json
-            has_project_file = any(
-                e.name == self.PROJECT_FILE 
-                for e in response.entries
-            )
+            file_names = [e.name for e in response.entries]
+            print(f"[ProjectData] Files in project: {file_names}")
+            
+            has_project_file = self.PROJECT_FILE in file_names
             
             if not has_project_file:
+                print("[ProjectData] No project.json, creating empty")
                 # Создаём пустой файл проекта
                 self.save()
                 return True
@@ -56,6 +63,8 @@ class ProjectData:
             import os
             
             temp_file = tempfile.mktemp(suffix=".json")
+            print(f"[ProjectData] Downloading {self.project_file_path} to {temp_file}")
+            
             try:
                 self._gateway.download_file(
                     self.project_file_path,
@@ -65,13 +74,16 @@ class ProjectData:
                 with open(temp_file, 'r', encoding='utf-8') as f:
                     self._data = json.load(f)
                 
+                print(f"[ProjectData] Loaded data: {len(self._data.get('assets', []))} assets, {len(self._data.get('clips', []))} clips")
                 return True
             finally:
                 if os.path.exists(temp_file):
                     os.remove(temp_file)
                     
         except Exception as e:
+            import traceback
             print(f"[ProjectData] Load error: {e}")
+            traceback.print_exc()
             return False
     
     def save(self) -> bool:

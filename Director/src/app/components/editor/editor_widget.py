@@ -271,11 +271,14 @@ class EditorWidget(QWidget):
             print(f"[Editor] Loaded {len(assets)} assets, {len(clips_data)} clips")
     
     def _mark_needs_save(self) -> None:
-        """Пометить что нужно сохранить."""
+        """Пометить что нужно сохранить и сразу сохранить."""
         self._needs_save = True
+        # Сохраняем сразу, не ждём таймера
+        self._save_project()
+        self._needs_save = False
     
     def _auto_save(self) -> None:
-        """Автосохранение проекта."""
+        """Автосохранение проекта (backup на случай если что-то пропустили)."""
         if self._needs_save:
             self._save_project()
             self._needs_save = False
