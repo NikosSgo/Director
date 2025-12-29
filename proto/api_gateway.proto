@@ -1,0 +1,236 @@
+syntax = "proto3";
+
+package api_gateway;
+
+// ============================================================
+// API Gateway - единая точка входа для всех сервисов Director
+// ============================================================
+
+service ApiGateway {
+    // === Подключение и статус ===
+    
+    // Проверить состояние всех сервисов
+    rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
+    
+    // Получить информацию о всех подключённых сервисах
+    rpc GetServicesInfo(GetServicesInfoRequest) returns (GetServicesInfoResponse);
+
+    // === Проекты (проксирование к DirectorEngine) ===
+    
+    rpc ListProjects(ListProjectsRequest) returns (ListProjectsResponse);
+    rpc CreateProject(CreateProjectRequest) returns (CreateProjectResponse);
+    rpc OpenProject(OpenProjectRequest) returns (OpenProjectResponse);
+    rpc DeleteProject(DeleteProjectRequest) returns (DeleteProjectResponse);
+
+    // === Файловая система (проксирование к FileGateway) ===
+    
+    rpc GetStorageInfo(GetStorageInfoRequest) returns (GetStorageInfoResponse);
+    rpc BrowseDirectory(BrowseDirectoryRequest) returns (BrowseDirectoryResponse);
+    rpc CreateDirectory(CreateDirectoryRequest) returns (CreateDirectoryResponse);
+    rpc Delete(DeleteRequest) returns (DeleteResponse);
+    rpc InitProjectStructure(InitProjectStructureRequest) returns (InitProjectStructureResponse);
+    
+    // Стриминг файлов
+    rpc UploadFile(stream UploadFileRequest) returns (UploadFileResponse);
+    rpc DownloadFile(DownloadFileRequest) returns (stream DownloadFileResponse);
+}
+
+// ============ Health Check ============
+
+message HealthCheckRequest {}
+
+message ServiceStatus {
+    string name = 1;
+    bool connected = 2;
+    string address = 3;
+    string version = 4;
+    int64 latency_ms = 5;
+}
+
+message HealthCheckResponse {
+    bool all_healthy = 1;
+    repeated ServiceStatus services = 2;
+}
+
+// ============ Services Info ============
+
+message GetServicesInfoRequest {}
+
+message GetServicesInfoResponse {
+    string gateway_version = 1;
+    
+    // Информация от DirectorEngine
+    string engine_hostname = 2;
+    
+    // Информация от FileGateway
+    string storage_hostname = 3;
+    string storage_os = 4;
+    string home_directory = 5;
+    string default_projects_path = 6;
+    repeated string root_paths = 7;
+    uint64 total_space = 8;
+    uint64 free_space = 9;
+}
+
+// ============ Проекты ============
+
+message ListProjectsRequest {}
+
+message Project {
+    string id = 1;
+    string name = 2;
+    string path = 3;
+    int64 created_at = 4;
+    int64 updated_at = 5;
+}
+
+message ListProjectsResponse {
+    repeated Project projects = 1;
+}
+
+message CreateProjectRequest {
+    string name = 1;
+    string path = 2;  // Путь на файловом сервере
+}
+
+message CreateProjectResponse {
+    bool success = 1;
+    string error_message = 2;
+    Project project = 3;
+}
+
+message OpenProjectRequest {
+    string project_id = 1;
+}
+
+message OpenProjectResponse {
+    bool success = 1;
+    string error_message = 2;
+    Project project = 3;
+}
+
+message DeleteProjectRequest {
+    string project_id = 1;
+    bool delete_files = 2;  // Удалить файлы на диске
+}
+
+message DeleteProjectResponse {
+    bool success = 1;
+    string error_message = 2;
+}
+
+// ============ Файловая система ============
+
+message GetStorageInfoRequest {}
+
+message GetStorageInfoResponse {
+    string storage_id = 1;
+    string hostname = 2;
+    string os = 3;
+    string home_directory = 4;
+    string default_projects_path = 5;
+    repeated string root_paths = 6;
+    uint64 total_space = 7;
+    uint64 free_space = 8;
+}
+
+message BrowseDirectoryRequest {
+    string path = 1;
+}
+
+message DirectoryEntry {
+    string name = 1;
+    string path = 2;
+    bool is_directory = 3;
+    uint64 size = 4;
+    int64 created_at = 5;
+    int64 modified_at = 6;
+    string mime_type = 7;
+}
+
+message BrowseDirectoryResponse {
+    bool success = 1;
+    string error_message = 2;
+    string current_path = 3;
+    string parent_path = 4;
+    repeated DirectoryEntry entries = 5;
+}
+
+message CreateDirectoryRequest {
+    string path = 1;
+    bool create_parents = 2;
+}
+
+message CreateDirectoryResponse {
+    bool success = 1;
+    string error_message = 2;
+    string created_path = 3;
+}
+
+message DeleteRequest {
+    string path = 1;
+    bool recursive = 2;
+}
+
+message DeleteResponse {
+    bool success = 1;
+    string error_message = 2;
+}
+
+message InitProjectStructureRequest {
+    string base_path = 1;
+    string project_name = 2;
+}
+
+message InitProjectStructureResponse {
+    bool success = 1;
+    string error_message = 2;
+    string project_path = 3;
+    string assets_path = 4;
+    string video_path = 5;
+    string audio_path = 6;
+    string images_path = 7;
+    string timeline_path = 8;
+    string exports_path = 9;
+}
+
+// ============ Загрузка/Скачивание ============
+
+message UploadFileRequest {
+    oneof data {
+        UploadFileMetadata metadata = 1;
+        bytes chunk = 2;
+    }
+}
+
+message UploadFileMetadata {
+    string destination_path = 1;
+    string filename = 2;
+    uint64 total_size = 3;
+    bool overwrite = 4;
+}
+
+message UploadFileResponse {
+    bool success = 1;
+    string error_message = 2;
+    string file_path = 3;
+    uint64 bytes_written = 4;
+}
+
+message DownloadFileRequest {
+    string path = 1;
+}
+
+message DownloadFileResponse {
+    oneof data {
+        DownloadFileMetadata metadata = 1;
+        bytes chunk = 2;
+    }
+}
+
+message DownloadFileMetadata {
+    string filename = 1;
+    uint64 total_size = 2;
+    string mime_type = 3;
+}
+

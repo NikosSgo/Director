@@ -1,12 +1,13 @@
 #!/bin/bash
+
 # ===========================================
-# Director - Скрипт запуска всех сервисов
+# Скрипт запуска всех сервисов Director
 # ===========================================
 
 set -e
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$PROJECT_ROOT"
 
 # Цвета для вывода
 RED='\033[0;31m'
@@ -15,155 +16,150 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-echo -e "${BLUE}╔════════════════════════════════════════╗${NC}"
-echo -e "${BLUE}║       Director - Запуск проекта        ║${NC}"
-echo -e "${BLUE}╚════════════════════════════════════════╝${NC}"
-echo
+log_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
+log_success() { echo -e "${GREEN}[OK]${NC} $1"; }
+log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
+log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
-# Функция для проверки порта
-check_port() {
-    local port=$1
-    if lsof -Pi :$port -sTCP:LISTEN -t >/dev/null 2>&1; then
-        return 0  # Порт занят
-    else
-        return 1  # Порт свободен
-    fi
-}
-
-# Функция для остановки процесса на порту
-kill_port() {
-    local port=$1
-    local pid=$(lsof -Pi :$port -sTCP:LISTEN -t 2>/dev/null)
-    if [ -n "$pid" ]; then
-        echo -e "${YELLOW}Останавливаем процесс на порту $port (PID: $pid)${NC}"
-        kill $pid 2>/dev/null || true
-        sleep 1
-    fi
-}
-
-# Функция для cleanup при выходе
-cleanup() {
-    echo
-    echo -e "${YELLOW}Останавливаем сервисы...${NC}"
+# Проверка зависимостей
+check_dependencies() {
+    log_info "Проверка зависимостей..."
     
-    # Останавливаем фоновые процессы
-    if [ -n "$ENGINE_PID" ]; then
-        kill $ENGINE_PID 2>/dev/null || true
-    fi
-    if [ -n "$FILE_GATEWAY_PID" ]; then
-        kill $FILE_GATEWAY_PID 2>/dev/null || true
+    if ! command -v cargo &> /dev/null; then
+        log_error "cargo не найден. Установите Rust: https://rustup.rs/"
+        exit 1
     fi
     
-    # Ждём завершения
-    wait 2>/dev/null || true
+    if ! command -v uv &> /dev/null; then
+        log_error "uv не найден. Установите: pip install uv"
+        exit 1
+    fi
     
-    echo -e "${GREEN}Все сервисы остановлены${NC}"
-    exit 0
+    log_success "Все зависимости найдены"
 }
 
-trap cleanup SIGINT SIGTERM
+# Сборка Rust проектов
+build_rust() {
+    log_info "Сборка Rust проектов..."
+    
+    log_info "  Сборка DirectorEngine..."
+    (cd DirectorEngine && cargo build --release 2>&1 | tail -1)
+    
+    log_info "  Сборка FileGateway..."
+    (cd FileGateway && cargo build --release 2>&1 | tail -1)
+    
+    log_info "  Сборка ApiGateway..."
+    (cd ApiGateway && cargo build --release 2>&1 | tail -1)
+    
+    log_success "Rust проекты собраны"
+}
 
-# Проверяем зависимости
-echo -e "${BLUE}[1/5]${NC} Проверка зависимостей..."
+# Генерация Python proto
+generate_proto() {
+    log_info "Генерация Python protobuf..."
+    
+    cd Director/src
+    uv run python -m grpc_tools.protoc \
+        -I../../proto \
+        --python_out=app/api/proto \
+        --grpc_python_out=app/api/proto \
+        ../../proto/director.proto \
+        ../../proto/file_gateway.proto \
+        ../../proto/api_gateway.proto
+    cd ../..
+    
+    log_success "Protobuf сгенерирован"
+}
 
-if ! command -v cargo &> /dev/null; then
-    echo -e "${RED}Ошибка: cargo не найден. Установите Rust.${NC}"
-    exit 1
-fi
+# Освобождение портов
+free_ports() {
+    log_info "Проверка портов..."
+    
+    for port in 50050 50051 50052; do
+        pid=$(lsof -ti :$port 2>/dev/null || true)
+        if [ -n "$pid" ]; then
+            log_warn "Порт $port занят (PID: $pid), освобождаю..."
+            kill -9 $pid 2>/dev/null || true
+            sleep 1
+        fi
+    done
+    
+    log_success "Порты свободны"
+}
 
-if ! command -v uv &> /dev/null; then
-    echo -e "${RED}Ошибка: uv не найден. Установите uv (pip install uv).${NC}"
-    exit 1
-fi
+# Запуск сервисов
+start_services() {
+    log_info "Запуск сервисов..."
+    
+    # DirectorEngine (порт 50051)
+    log_info "  Запуск DirectorEngine на :50051..."
+    RUST_LOG=info ./DirectorEngine/target/release/director-engine &
+    ENGINE_PID=$!
+    sleep 1
+    
+    # FileGateway (порт 50052)
+    log_info "  Запуск FileGateway на :50052..."
+    RUST_LOG=info ./FileGateway/target/release/file-gateway &
+    FILE_GW_PID=$!
+    sleep 1
+    
+    # ApiGateway (порт 50050)
+    log_info "  Запуск ApiGateway на :50050..."
+    RUST_LOG=info ./ApiGateway/target/release/api-gateway &
+    API_GW_PID=$!
+    sleep 2
+    
+    log_success "Все сервисы запущены"
+    echo ""
+    log_info "PIDs: Engine=$ENGINE_PID, FileGW=$FILE_GW_PID, ApiGW=$API_GW_PID"
+}
 
-echo -e "${GREEN}✓ Все зависимости найдены${NC}"
-echo
+# Запуск GUI
+start_gui() {
+    log_info "Запуск Director GUI..."
+    echo ""
+    
+    cd Director/src
+    uv run python main.py
+    cd ../..
+}
 
-# Собираем Rust проекты
-echo -e "${BLUE}[2/5]${NC} Сборка DirectorEngine..."
-cd "$PROJECT_ROOT/DirectorEngine"
-cargo build --release 2>&1 | tail -3
-echo -e "${GREEN}✓ DirectorEngine собран${NC}"
-echo
+# Остановка сервисов
+stop_services() {
+    echo ""
+    log_info "Остановка сервисов..."
+    
+    pkill -f "director-engine" 2>/dev/null || true
+    pkill -f "file-gateway" 2>/dev/null || true
+    pkill -f "api-gateway" 2>/dev/null || true
+    
+    log_success "Все сервисы остановлены"
+}
 
-echo -e "${BLUE}[3/5]${NC} Сборка FileGateway..."
-cd "$PROJECT_ROOT/FileGateway"
-cargo build --release 2>&1 | tail -3
-echo -e "${GREEN}✓ FileGateway собран${NC}"
-echo
+# Обработка Ctrl+C
+trap stop_services EXIT
 
-# Генерируем protobuf для Python
-echo -e "${BLUE}[4/5]${NC} Генерация Python protobuf..."
-cd "$PROJECT_ROOT/Director"
-uv sync --quiet
-uv run python -m grpc_tools.protoc \
-    -I"$PROJECT_ROOT/proto" \
-    --python_out=src/app/api/proto \
-    --grpc_python_out=src/app/api/proto \
-    "$PROJECT_ROOT/proto/director.proto" \
-    "$PROJECT_ROOT/proto/file_gateway.proto"
+# Главная функция
+main() {
+    echo ""
+    echo "=========================================="
+    echo "       Director - Video Editor           "
+    echo "=========================================="
+    echo ""
+    
+    check_dependencies
+    build_rust
+    generate_proto
+    free_ports
+    start_services
+    
+    echo ""
+    echo "=========================================="
+    echo "  API Gateway доступен на localhost:50050"
+    echo "=========================================="
+    echo ""
+    
+    start_gui
+}
 
-# Исправляем импорты
-sed -i 's/import director_pb2/from app.api.proto import director_pb2/' src/app/api/proto/director_pb2_grpc.py
-sed -i 's/import file_gateway_pb2/from app.api.proto import file_gateway_pb2/' src/app/api/proto/file_gateway_pb2_grpc.py
-echo -e "${GREEN}✓ Protobuf сгенерирован${NC}"
-echo
-
-# Освобождаем порты если заняты
-if check_port 50051; then
-    kill_port 50051
-fi
-if check_port 50052; then
-    kill_port 50052
-fi
-
-# Запускаем сервисы
-echo -e "${BLUE}[5/5]${NC} Запуск сервисов..."
-echo
-
-# DirectorEngine
-echo -e "${YELLOW}→ Запуск DirectorEngine на порту 50051...${NC}"
-cd "$PROJECT_ROOT/DirectorEngine"
-RUST_LOG=info ./target/release/director-engine &
-ENGINE_PID=$!
-sleep 1
-
-if kill -0 $ENGINE_PID 2>/dev/null; then
-    echo -e "${GREEN}✓ DirectorEngine запущен (PID: $ENGINE_PID)${NC}"
-else
-    echo -e "${RED}✗ Ошибка запуска DirectorEngine${NC}"
-    exit 1
-fi
-
-# FileGateway
-echo -e "${YELLOW}→ Запуск FileGateway на порту 50052...${NC}"
-cd "$PROJECT_ROOT/FileGateway"
-RUST_LOG=info ./target/release/file-gateway &
-FILE_GATEWAY_PID=$!
-sleep 1
-
-if kill -0 $FILE_GATEWAY_PID 2>/dev/null; then
-    echo -e "${GREEN}✓ FileGateway запущен (PID: $FILE_GATEWAY_PID)${NC}"
-else
-    echo -e "${RED}✗ Ошибка запуска FileGateway${NC}"
-    exit 1
-fi
-
-echo
-echo -e "${GREEN}╔════════════════════════════════════════╗${NC}"
-echo -e "${GREEN}║     Все сервисы успешно запущены!      ║${NC}"
-echo -e "${GREEN}╚════════════════════════════════════════╝${NC}"
-echo
-echo -e "  ${BLUE}DirectorEngine${NC}: http://localhost:50051"
-echo -e "  ${BLUE}FileGateway${NC}:    http://localhost:50052"
-echo
-echo -e "${YELLOW}Запуск GUI клиента...${NC}"
-echo
-
-# Запускаем GUI
-cd "$PROJECT_ROOT/Director/src"
-uv run python main.py
-
-# После закрытия GUI выполняем cleanup
-cleanup
-
+main "$@"
