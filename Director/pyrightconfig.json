@@ -1,0 +1,10 @@
+{
+  "include": ["src"],
+  "extraPaths": ["src"],
+  "pythonVersion": "3.13",
+  "pythonPlatform": "Linux",
+  "typeCheckingMode": "basic",
+  "venvPath": ".",
+  "venv": ".venv"
+}
+
