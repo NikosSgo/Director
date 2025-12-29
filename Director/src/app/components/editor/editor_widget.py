@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
 )
 
+from app.api import GatewayClient
 from app.components.editor.video_player import VideoPlayer
 from app.components.editor.timeline import Timeline, Clip, TrackType
 from app.components.editor.assets_panel import AssetsPanel, Asset, AssetType
@@ -29,9 +30,15 @@ class EditorWidget(QWidget):
     
     back_to_hub = pyqtSignal()  # вернуться к списку проектов
     
-    def __init__(self, project: Project, parent: Optional[QWidget] = None):
+    def __init__(
+        self,
+        project: Project,
+        gateway: Optional[GatewayClient] = None,
+        parent: Optional[QWidget] = None,
+    ):
         super().__init__(parent)
         self._project = project
+        self._gateway = gateway
         
         self._setup_ui()
         self._setup_connections()
@@ -70,7 +77,10 @@ class EditorWidget(QWidget):
         """)
         
         # Панель ассетов (слева)
-        self._assets_panel = AssetsPanel(self._project.path)
+        self._assets_panel = AssetsPanel(
+            project_path=self._project.path,
+            gateway=self._gateway,
+        )
         self._assets_panel.setMinimumWidth(250)
         self._assets_panel.setMaximumWidth(400)
         top_splitter.addWidget(self._assets_panel)

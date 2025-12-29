@@ -1,12 +1,14 @@
 """Панель ассетов (медиафайлы проекта)."""
 
 from dataclasses import dataclass
-from typing import Optional, List
+from typing import Optional, List, Callable
 from pathlib import Path
 from enum import Enum, auto
+import subprocess
+import json
+import os
 
-from PyQt6.QtCore import Qt, pyqtSignal, QSize, QMimeData, QUrl
-from PyQt6.QtGui import QIcon, QDrag, QPixmap, QPainter, QColor
+from PyQt6.QtCore import Qt, pyqtSignal, QThread, pyqtSlot
 from PyQt6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -20,8 +22,10 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QMenu,
     QMessageBox,
+    QProgressDialog,
 )
 
+from app.api import GatewayClient
 from app.utils.styles import COLORS
 
 
@@ -38,7 +42,8 @@ class Asset:
     """Медиа-ассет проекта."""
     id: str
     name: str
-    file_path: str
+    file_path: str  # путь на сервере
+    local_path: str  # локальный путь (для превью)
     asset_type: AssetType
     duration_ms: int = 0  # для видео/аудио
     width: int = 0  # для видео/изображений
@@ -80,6 +85,118 @@ def get_asset_type(file_path: str) -> AssetType:
         return AssetType.IMAGE
     else:
         return AssetType.UNKNOWN
+
+
+def get_media_info(file_path: str) -> dict:
+    """Получить информацию о медиафайле через ffprobe."""
+    try:
+        result = subprocess.run(
+            [
+                'ffprobe',
+                '-v', 'quiet',
+                '-print_format', 'json',
+                '-show_format',
+                '-show_streams',
+                file_path
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        
+        if result.returncode == 0:
+            data = json.loads(result.stdout)
+            info = {}
+            
+            # Длительность
+            if 'format' in data and 'duration' in data['format']:
+                info['duration_ms'] = int(float(data['format']['duration']) * 1000)
+            
+            # Размеры видео
+            for stream in data.get('streams', []):
+                if stream.get('codec_type') == 'video':
+                    info['width'] = stream.get('width', 0)
+                    info['height'] = stream.get('height', 0)
+                    break
+            
+            return info
+    except (subprocess.TimeoutExpired, FileNotFoundError, json.JSONDecodeError):
+        pass
+    
+    return {}
+
+
+class ImportWorker(QThread):
+    """Фоновый поток для импорта файлов."""
+    
+    progress = pyqtSignal(int, int, str)  # current, total, filename
+    file_imported = pyqtSignal(object)  # Asset
+    finished = pyqtSignal()
+    error = pyqtSignal(str)
+    
+    def __init__(
+        self,
+        gateway: GatewayClient,
+        files: List[str],
+        destination_path: str,
+    ):
+        super().__init__()
+        self._gateway = gateway
+        self._files = files
+        self._destination_path = destination_path
+        self._asset_counter = 0
+    
+    def run(self):
+        total = len(self._files)
+        
+        for i, file_path in enumerate(self._files):
+            try:
+                filename = Path(file_path).name
+                self.progress.emit(i + 1, total, filename)
+                
+                # Получаем информацию о файле
+                file_size = os.path.getsize(file_path)
+                asset_type = get_asset_type(file_path)
+                media_info = get_media_info(file_path)
+                
+                # Определяем подпапку
+                subdir = {
+                    AssetType.VIDEO: "video",
+                    AssetType.AUDIO: "audio",
+                    AssetType.IMAGE: "images",
+                }.get(asset_type, "other")
+                
+                dest_dir = f"{self._destination_path}/{subdir}"
+                
+                # Загружаем файл на сервер
+                response = self._gateway.upload_file(
+                    local_path=file_path,
+                    destination_path=dest_dir,
+                    filename=filename,
+                    overwrite=False,
+                )
+                
+                if response.success:
+                    self._asset_counter += 1
+                    asset = Asset(
+                        id=f"asset_{self._asset_counter}_{i}",
+                        name=filename,
+                        file_path=response.file_path,
+                        local_path=file_path,
+                        asset_type=asset_type,
+                        duration_ms=media_info.get('duration_ms', 0),
+                        width=media_info.get('width', 0),
+                        height=media_info.get('height', 0),
+                        size_bytes=file_size,
+                    )
+                    self.file_imported.emit(asset)
+                else:
+                    self.error.emit(f"Ошибка загрузки {filename}: {response.error_message}")
+                    
+            except Exception as e:
+                self.error.emit(f"Ошибка импорта {file_path}: {str(e)}")
+        
+        self.finished.emit()
 
 
 class AssetListItem(QWidget):
@@ -137,16 +254,27 @@ class AssetListItem(QWidget):
 class AssetsPanel(QWidget):
     """Панель управления ассетами проекта."""
     
-    asset_selected = pyqtSignal(Asset)
-    asset_double_clicked = pyqtSignal(Asset)  # добавить на таймлайн
+    asset_selected = pyqtSignal(object)  # Asset
+    asset_double_clicked = pyqtSignal(object)  # Asset - добавить на таймлайн
     
-    def __init__(self, project_path: str = "", parent: Optional[QWidget] = None):
+    def __init__(
+        self,
+        project_path: str = "",
+        gateway: Optional[GatewayClient] = None,
+        parent: Optional[QWidget] = None,
+    ):
         super().__init__(parent)
         self._project_path = project_path
+        self._gateway = gateway
         self._assets: List[Asset] = []
         self._asset_counter = 0
+        self._import_worker: Optional[ImportWorker] = None
         
         self._setup_ui()
+    
+    def set_gateway(self, gateway: GatewayClient) -> None:
+        """Установить клиент Gateway."""
+        self._gateway = gateway
     
     def _setup_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -317,30 +445,80 @@ class AssetsPanel(QWidget):
     
     def _on_import(self) -> None:
         """Импорт файлов."""
+        if not self._gateway:
+            QMessageBox.warning(
+                self,
+                "Ошибка",
+                "Нет подключения к серверу.\nИмпорт недоступен."
+            )
+            return
+        
+        if not self._project_path:
+            QMessageBox.warning(
+                self,
+                "Ошибка", 
+                "Проект не выбран."
+            )
+            return
+        
         files, _ = QFileDialog.getOpenFileNames(
             self,
             "Импорт медиафайлов",
             "",
-            "Медиафайлы (*.mp4 *.avi *.mov *.mkv *.mp3 *.wav *.jpg *.png *.gif);;Все файлы (*.*)"
+            "Медиафайлы (*.mp4 *.avi *.mov *.mkv *.webm *.mp3 *.wav *.ogg *.jpg *.jpeg *.png *.gif);;Все файлы (*.*)"
         )
         
-        for file_path in files:
-            self._import_file(file_path)
+        if not files:
+            return
+        
+        # Путь к ассетам проекта
+        assets_path = f"{self._project_path}/assets"
+        
+        # Создаём диалог прогресса
+        self._progress = QProgressDialog(
+            "Импорт файлов...",
+            "Отмена",
+            0,
+            len(files),
+            self
+        )
+        self._progress.setWindowTitle("Импорт")
+        self._progress.setWindowModality(Qt.WindowModality.WindowModal)
+        self._progress.setMinimumDuration(0)
+        self._progress.setValue(0)
+        
+        # Запускаем воркер
+        self._import_worker = ImportWorker(
+            gateway=self._gateway,
+            files=files,
+            destination_path=assets_path,
+        )
+        self._import_worker.progress.connect(self._on_import_progress)
+        self._import_worker.file_imported.connect(self._on_file_imported)
+        self._import_worker.error.connect(self._on_import_error)
+        self._import_worker.finished.connect(self._on_import_finished)
+        self._import_worker.start()
     
-    def _import_file(self, file_path: str) -> None:
-        """Импортировать один файл."""
-        path = Path(file_path)
+    @pyqtSlot(int, int, str)
+    def _on_import_progress(self, current: int, total: int, filename: str) -> None:
+        self._progress.setValue(current)
+        self._progress.setLabelText(f"Импорт: {filename}\n({current}/{total})")
         
-        self._asset_counter += 1
-        asset = Asset(
-            id=f"asset_{self._asset_counter}",
-            name=path.name,
-            file_path=file_path,
-            asset_type=get_asset_type(file_path),
-            size_bytes=path.stat().st_size if path.exists() else 0,
-        )
-        
+        if self._progress.wasCanceled():
+            self._import_worker.terminate()
+    
+    @pyqtSlot(object)
+    def _on_file_imported(self, asset: Asset) -> None:
         self.add_asset(asset)
+    
+    @pyqtSlot(str)
+    def _on_import_error(self, error: str) -> None:
+        print(f"[Import Error] {error}")
+    
+    @pyqtSlot()
+    def _on_import_finished(self) -> None:
+        self._progress.close()
+        self._import_worker = None
     
     def _on_search(self, text: str) -> None:
         self._update_lists()
@@ -390,6 +568,13 @@ class AssetsPanel(QWidget):
     
     def _remove_asset(self, asset: Asset) -> None:
         """Удалить ассет."""
-        self._assets = [a for a in self._assets if a.id != asset.id]
-        self._update_lists()
-
+        reply = QMessageBox.question(
+            self,
+            "Удаление",
+            f"Удалить «{asset.name}» из проекта?\n\nФайл на сервере останется.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            self._assets = [a for a in self._assets if a.id != asset.id]
+            self._update_lists()

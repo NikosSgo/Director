@@ -90,7 +90,10 @@ class MainWindow(QMainWindow, QtDisposableMixin):
         if self._editor:
             self._close_editor()
         
-        self._editor = EditorWidget(self._current_project)
+        self._editor = EditorWidget(
+            project=self._current_project,
+            gateway=self._store.gateway,
+        )
         self._editor.back_to_hub.connect(self._on_back_to_hub)
         self._stack.addWidget(self._editor)
         self._stack.setCurrentWidget(self._editor)
