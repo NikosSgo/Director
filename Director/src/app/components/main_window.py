@@ -10,10 +10,10 @@ from PyQt6.QtWidgets import (
     QStatusBar,
 )
 
-from app.components.editor_placeholder import EditorPlaceholder
+from app.components.editor import EditorWidget
 from app.components.project_hub import ProjectHubWidget
-from app.models.project import AppState, Project, ProjectState
-from app.store import AppStore
+from app.models.project import Project, ProjectState
+from app.store import AppStore, Action
 from app.utils.rx_qt import QtDisposableMixin
 
 
@@ -24,10 +24,11 @@ class MainWindow(QMainWindow, QtDisposableMixin):
         super().__init__()
         self._store = store
         self._current_project: Optional[Project] = None
+        self._editor: Optional[EditorWidget] = None
         self.init_disposables()
 
         self.setWindowTitle("Director — Видеоредактор с ИИ")
-        self.setMinimumSize(1200, 800)
+        self.setMinimumSize(1280, 800)
 
         self._setup_ui()
         self._setup_subscriptions()
@@ -73,22 +74,44 @@ class MainWindow(QMainWindow, QtDisposableMixin):
         match state:
             case ProjectState.OPEN:
                 if self._current_project:
-                    editor = EditorPlaceholder(self._current_project)
-                    self._stack.addWidget(editor)
-                    self._stack.setCurrentWidget(editor)
+                    self._open_editor()
 
             case ProjectState.CLOSED:
-                self._stack.setCurrentIndex(0)
-                while self._stack.count() > 1:
-                    widget = self._stack.widget(1)
-                    self._stack.removeWidget(widget)
-                    widget.deleteLater()
+                self._close_editor()
 
             case ProjectState.LOADING:
                 self._status_bar.showMessage("Загрузка проекта...")
 
             case ProjectState.ERROR:
                 self._status_bar.showMessage("Ошибка загрузки проекта")
+
+    def _open_editor(self) -> None:
+        """Открыть редактор для текущего проекта."""
+        if self._editor:
+            self._close_editor()
+        
+        self._editor = EditorWidget(self._current_project)
+        self._editor.back_to_hub.connect(self._on_back_to_hub)
+        self._stack.addWidget(self._editor)
+        self._stack.setCurrentWidget(self._editor)
+        
+        # Скрываем статус-бар в редакторе
+        self._status_bar.hide()
+
+    def _close_editor(self) -> None:
+        """Закрыть редактор."""
+        self._stack.setCurrentIndex(0)
+        
+        if self._editor:
+            self._stack.removeWidget(self._editor)
+            self._editor.deleteLater()
+            self._editor = None
+        
+        self._status_bar.show()
+
+    def _on_back_to_hub(self) -> None:
+        """Вернуться к списку проектов."""
+        self._store.dispatch(Action.close_project())
 
     def _on_connections_changed(self, connections: tuple[bool, bool]) -> None:
         engine_connected, file_gateway_connected = connections
@@ -102,16 +125,13 @@ class MainWindow(QMainWindow, QtDisposableMixin):
         else:
             self._status_bar.showMessage("Нет подключения к сервисам")
 
-    def show_project_hub(self) -> None:
-        from app.store.actions import Action
-        self._store.dispatch(Action.close_project())
-
     def closeEvent(self, event: QCloseEvent) -> None:
         if self._current_project:
             reply = QMessageBox.question(
                 self,
                 "Закрытие",
-                "Вы уверены, что хотите закрыть приложение?",
+                "Вы уверены, что хотите закрыть приложение?\n\n"
+                "Несохранённые изменения будут потеряны.",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             )
             if reply == QMessageBox.StandardButton.No:

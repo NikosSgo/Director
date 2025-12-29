@@ -5,6 +5,7 @@ description = "Интерактивный редактор видео с иск�
 requires-python = ">=3.13"
 dependencies = [
     "PyQt6>=6.6.0",
+    "PyQt6-WebEngine>=6.6.0",
     "grpcio>=1.60.0",
     "grpcio-tools>=1.60.0",
     "protobuf>=4.25.0",
