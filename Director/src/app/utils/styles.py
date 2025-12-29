@@ -5,6 +5,7 @@ COLORS = {
     "bg_dark": "#0d0d0d",
     "bg_primary": "#1a1a1a",
     "bg_secondary": "#252525",
+    "bg_tertiary": "#2a2a2a",
     "bg_elevated": "#2d2d2d",
     "bg_hover": "#3a3a3a",
     "accent": "#e85d04",

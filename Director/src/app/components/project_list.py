@@ -48,7 +48,7 @@ class ProjectListItemWidget(QWidget):
         layout.addWidget(self._path_label)
 
         # Дата изменения
-        date_str = self.project.modified_at.strftime("%d.%m.%Y %H:%M")
+        date_str = self.project.updated_datetime.strftime("%d.%m.%Y %H:%M")
         self._date_label = QLabel(f"Изменён: {date_str}")
         self._date_label.setStyleSheet(f"font-size: 11px; color: {COLORS['text_secondary']};")
         layout.addWidget(self._date_label)
@@ -155,7 +155,7 @@ class ProjectListWidget(QWidget):
 
         # Сортируем по дате изменения (новые сверху)
         sorted_projects = sorted(
-            self._projects, key=lambda p: p.modified_at, reverse=True
+            self._projects, key=lambda p: p.updated_at, reverse=True
         )
 
         for project in sorted_projects:
