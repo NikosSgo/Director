@@ -1,8 +1,8 @@
-w"""Удалённый браузер файловой системы сервера."""
+"""Удалённый браузер файловой системы сервера."""
 
 from typing import Optional
 
-from PyQt6.QtCore import Qt, pyqtSignal, QSize
+from PyQt6.QtCore import Qt, pyqtSignal, QThread, pyqtSlot
 from PyQt6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -16,30 +16,65 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from app.api import FileGatewayClient
-from app.models.project import DirectoryEntry, DirectoryListing, StorageInfo
+from app.api import GatewayClient
+from app.models.project import StorageInfo
 from app.utils.styles import COLORS
+
+
+class BrowseWorker(QThread):
+    """Фоновый поток для загрузки директории."""
+    
+    finished = pyqtSignal(object)  # dict or Exception
+    
+    def __init__(self, gateway: GatewayClient, path: str):
+        super().__init__()
+        self._gateway = gateway
+        self._path = path
+    
+    def run(self):
+        try:
+            response = self._gateway.browse_directory(self._path)
+            if response.success:
+                result = {
+                    "current_path": response.current_path,
+                    "parent_path": response.parent_path,
+                    "entries": [
+                        {
+                            "name": e.name,
+                            "path": e.path,
+                            "is_directory": e.is_directory,
+                            "size": e.size,
+                        }
+                        for e in response.entries
+                    ],
+                }
+                self.finished.emit(result)
+            else:
+                self.finished.emit(Exception(response.error_message))
+        except Exception as e:
+            self.finished.emit(e)
 
 
 class RemoteFileBrowser(QDialog):
     """
-    Диалог для навигации по файловой системе FileGateway.
+    Диалог для навигации по файловой системе через API Gateway.
     """
 
     directory_selected = pyqtSignal(str)
 
     def __init__(
         self,
-        client: FileGatewayClient,
+        gateway: GatewayClient,
         storage_info: Optional[StorageInfo] = None,
         initial_path: str = "",
         parent: Optional[QWidget] = None,
     ):
         super().__init__(parent)
-        self._client = client
+        self._gateway = gateway
         self._storage_info = storage_info
         self._current_path = initial_path
         self._selected_path: Optional[str] = None
+        self._worker: Optional[BrowseWorker] = None
 
         self.setWindowTitle("Выбор директории на сервере")
         self.setMinimumSize(600, 500)
@@ -149,45 +184,48 @@ class RemoteFileBrowser(QDialog):
         loading_item.setFlags(Qt.ItemFlag.NoItemFlags)
         self._list_widget.addItem(loading_item)
 
-        def on_success(listing: DirectoryListing) -> None:
-            self._list_widget.clear()
-            self._current_path = listing.current_path
-            self._path_input.setText(listing.current_path)
-            self._selected_label.setText(listing.current_path)
-            self._selected_path = listing.current_path
+        # Запускаем фоновый поток
+        self._worker = BrowseWorker(self._gateway, path)
+        self._worker.finished.connect(self._on_browse_finished)
+        self._worker.start()
 
-            self._up_btn.setEnabled(bool(listing.parent_path))
+    @pyqtSlot(object)
+    def _on_browse_finished(self, result) -> None:
+        self._list_widget.clear()
 
-            for entry in listing.entries:
-                if entry.is_directory:
-                    item = QListWidgetItem(f"📁 {entry.name}")
-                    item.setData(Qt.ItemDataRole.UserRole, entry)
-                    self._list_widget.addItem(item)
-
-        def on_error(e: Exception) -> None:
-            self._list_widget.clear()
-            error_item = QListWidgetItem(f"Ошибка: {e}")
+        if isinstance(result, Exception):
+            error_item = QListWidgetItem(f"Ошибка: {result}")
             error_item.setForeground(Qt.GlobalColor.red)
             error_item.setFlags(Qt.ItemFlag.NoItemFlags)
             self._list_widget.addItem(error_item)
+            return
 
-        self._client.browse_directory(path).subscribe(
-            on_next=on_success,
-            on_error=on_error,
-        )
+        listing = result
+        self._current_path = listing["current_path"]
+        self._path_input.setText(listing["current_path"])
+        self._selected_label.setText(listing["current_path"])
+        self._selected_path = listing["current_path"]
+
+        self._up_btn.setEnabled(bool(listing["parent_path"]))
+
+        for entry in listing["entries"]:
+            if entry["is_directory"]:
+                item = QListWidgetItem(f"📁 {entry['name']}")
+                item.setData(Qt.ItemDataRole.UserRole, entry)
+                self._list_widget.addItem(item)
 
     def _on_item_double_clicked(self, item: QListWidgetItem) -> None:
-        entry: Optional[DirectoryEntry] = item.data(Qt.ItemDataRole.UserRole)
-        if entry and entry.is_directory:
-            self._navigate_to(entry.path)
+        entry = item.data(Qt.ItemDataRole.UserRole)
+        if entry and entry.get("is_directory"):
+            self._navigate_to(entry["path"])
 
     def _on_selection_changed(self) -> None:
         items = self._list_widget.selectedItems()
         if items:
-            entry: Optional[DirectoryEntry] = items[0].data(Qt.ItemDataRole.UserRole)
-            if entry and entry.is_directory:
-                self._selected_label.setText(entry.path)
-                self._selected_path = entry.path
+            entry = items[0].data(Qt.ItemDataRole.UserRole)
+            if entry and entry.get("is_directory"):
+                self._selected_label.setText(entry["path"])
+                self._selected_path = entry["path"]
 
     def _on_path_entered(self) -> None:
         path = self._path_input.text().strip()

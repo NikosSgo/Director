@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from app.api import FileGatewayClient
+from app.api import GatewayClient
 from app.components.remote_file_browser import RemoteFileBrowser
 from app.models.project import StorageInfo
 from app.utils.styles import COLORS
@@ -23,12 +23,12 @@ class CreateProjectDialog(QDialog):
 
     def __init__(
         self,
-        file_gateway_client: FileGatewayClient,
+        gateway: GatewayClient,
         storage_info: Optional[StorageInfo] = None,
         parent: Optional[QWidget] = None,
     ):
         super().__init__(parent)
-        self._client = file_gateway_client
+        self._gateway = gateway
         self._storage_info = storage_info
 
         self.setWindowTitle("Новый проект")
@@ -112,7 +112,7 @@ class CreateProjectDialog(QDialog):
 
     def _browse_path(self) -> None:
         dialog = RemoteFileBrowser(
-            client=self._client,
+            gateway=self._gateway,
             storage_info=self._storage_info,
             initial_path=self._path_input.text(),
             parent=self,

@@ -199,15 +199,15 @@ class ProjectHubWidget(QWidget, QtDisposableMixin):
         self._store.dispatch(Action.load_projects_request())
 
     def _on_create_project(self) -> None:
-        if not self._store.state.file_gateway_connected:
+        if not self._store.state.engine_connected:
             QMessageBox.warning(
                 self, "Ошибка",
-                "FileGateway не подключён. Невозможно создать проект."
+                "Сервисы не подключены. Невозможно создать проект."
             )
             return
 
         dialog = CreateProjectDialog(
-            file_gateway_client=self._store.file_gateway,
+            gateway=self._store.gateway,
             storage_info=self._storage_info,
             parent=self,
         )
@@ -236,7 +236,7 @@ class ProjectHubWidget(QWidget, QtDisposableMixin):
         )
 
         if reply == QMessageBox.StandardButton.Yes:
-            self._store.dispatch(Action.delete_project_request(project.id))
+            self._store.dispatch(Action.delete_project_request(project.id, delete_files=False))
 
     def cleanup(self) -> None:
         self.dispose_all()

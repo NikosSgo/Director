@@ -10,21 +10,13 @@ from app.models.project import EngineInfo, Project, StorageInfo
 class ActionType(Enum):
     """Типы действий."""
 
-    # Подключение к Engine
-    CONNECT_ENGINE_REQUEST = auto()
-    CONNECT_ENGINE_SUCCESS = auto()
-    CONNECT_ENGINE_FAILURE = auto()
+    # Подключение к API Gateway
+    CONNECT_REQUEST = auto()
+    CONNECT_SUCCESS = auto()
+    CONNECT_FAILURE = auto()
 
-    # Подключение к FileGateway
-    CONNECT_FILE_GATEWAY_REQUEST = auto()
-    CONNECT_FILE_GATEWAY_SUCCESS = auto()
-    CONNECT_FILE_GATEWAY_FAILURE = auto()
-
-    # Информация о движке
-    GET_ENGINE_INFO_SUCCESS = auto()
-
-    # Информация о хранилище
-    GET_STORAGE_INFO_SUCCESS = auto()
+    # Информация о сервисах
+    GET_SERVICES_INFO_SUCCESS = auto()
 
     # Проекты - загрузка списка
     LOAD_PROJECTS_REQUEST = auto()
@@ -49,6 +41,11 @@ class ActionType(Enum):
     # Проекты - закрытие
     CLOSE_PROJECT = auto()
 
+    # Файловая система - навигация
+    BROWSE_DIRECTORY_REQUEST = auto()
+    BROWSE_DIRECTORY_SUCCESS = auto()
+    BROWSE_DIRECTORY_FAILURE = auto()
+
     # Очистка ошибок
     CLEAR_ERROR = auto()
 
@@ -61,42 +58,28 @@ class Action:
     payload: Any = None
     error: Optional[str] = None
 
-    # Engine connection
+    # === Connection ===
+    
     @staticmethod
-    def connect_engine_request() -> "Action":
-        return Action(ActionType.CONNECT_ENGINE_REQUEST)
+    def connect_request() -> "Action":
+        return Action(ActionType.CONNECT_REQUEST)
 
     @staticmethod
-    def connect_engine_success() -> "Action":
-        return Action(ActionType.CONNECT_ENGINE_SUCCESS)
+    def connect_success() -> "Action":
+        return Action(ActionType.CONNECT_SUCCESS)
 
     @staticmethod
-    def connect_engine_failure(error: str) -> "Action":
-        return Action(ActionType.CONNECT_ENGINE_FAILURE, error=error)
+    def connect_failure(error: str) -> "Action":
+        return Action(ActionType.CONNECT_FAILURE, error=error)
 
-    # FileGateway connection
+    # === Services Info ===
+    
     @staticmethod
-    def connect_file_gateway_request() -> "Action":
-        return Action(ActionType.CONNECT_FILE_GATEWAY_REQUEST)
+    def get_services_info_success(info: dict) -> "Action":
+        return Action(ActionType.GET_SERVICES_INFO_SUCCESS, payload=info)
 
-    @staticmethod
-    def connect_file_gateway_success() -> "Action":
-        return Action(ActionType.CONNECT_FILE_GATEWAY_SUCCESS)
-
-    @staticmethod
-    def connect_file_gateway_failure(error: str) -> "Action":
-        return Action(ActionType.CONNECT_FILE_GATEWAY_FAILURE, error=error)
-
-    # Info
-    @staticmethod
-    def get_engine_info_success(info: EngineInfo) -> "Action":
-        return Action(ActionType.GET_ENGINE_INFO_SUCCESS, payload=info)
-
-    @staticmethod
-    def get_storage_info_success(info: StorageInfo) -> "Action":
-        return Action(ActionType.GET_STORAGE_INFO_SUCCESS, payload=info)
-
-    # Projects
+    # === Projects ===
+    
     @staticmethod
     def load_projects_request() -> "Action":
         return Action(ActionType.LOAD_PROJECTS_REQUEST)
@@ -134,8 +117,8 @@ class Action:
         return Action(ActionType.OPEN_PROJECT_FAILURE, error=error)
 
     @staticmethod
-    def delete_project_request(project_id: str) -> "Action":
-        return Action(ActionType.DELETE_PROJECT_REQUEST, payload=project_id)
+    def delete_project_request(project_id: str, delete_files: bool = False) -> "Action":
+        return Action(ActionType.DELETE_PROJECT_REQUEST, payload={"id": project_id, "delete_files": delete_files})
 
     @staticmethod
     def delete_project_success(project_id: str) -> "Action":
@@ -149,6 +132,22 @@ class Action:
     def close_project() -> "Action":
         return Action(ActionType.CLOSE_PROJECT)
 
+    # === File System ===
+    
+    @staticmethod
+    def browse_directory_request(path: str = "") -> "Action":
+        return Action(ActionType.BROWSE_DIRECTORY_REQUEST, payload=path)
+
+    @staticmethod
+    def browse_directory_success(result: dict) -> "Action":
+        return Action(ActionType.BROWSE_DIRECTORY_SUCCESS, payload=result)
+
+    @staticmethod
+    def browse_directory_failure(error: str) -> "Action":
+        return Action(ActionType.BROWSE_DIRECTORY_FAILURE, error=error)
+
+    # === Utils ===
+    
     @staticmethod
     def clear_error() -> "Action":
         return Action(ActionType.CLEAR_ERROR)

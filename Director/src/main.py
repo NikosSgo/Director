@@ -2,9 +2,9 @@
 
 import sys
 
-from PyQt6.QtWidgets import QApplication, QMessageBox
+from PyQt6.QtWidgets import QApplication
 
-from app.api import EngineClient, FileGatewayClient
+from app.api import GatewayClient
 from app.components import MainWindow
 from app.store import AppStore, Action
 from app.utils.styles import STYLESHEET
@@ -17,20 +17,18 @@ def main() -> int:
     app.setApplicationDisplayName("Director")
     app.setStyleSheet(STYLESHEET)
 
-    # Создаём клиенты для двух сервисов
-    engine_client = EngineClient()  # порт 50051
-    file_gateway_client = FileGatewayClient()  # порт 50052
+    # Создаём клиент для API Gateway (единая точка входа)
+    gateway = GatewayClient("[::1]:50050")
 
     # Создаём реактивный store
-    store = AppStore(engine_client, file_gateway_client)
+    store = AppStore(gateway)
 
     # Создаём и показываем главное окно
     window = MainWindow(store)
     window.show()
 
-    # Инициируем подключение к обоим сервисам
-    store.dispatch(Action.connect_engine_request())
-    store.dispatch(Action.connect_file_gateway_request())
+    # Инициируем подключение к API Gateway
+    store.dispatch(Action.connect_request())
 
     return app.exec()
 

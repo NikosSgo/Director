@@ -22,21 +22,18 @@ class Project:
     id: str
     name: str
     path: str
-    file_gateway_id: str
-    created_at: datetime
-    modified_at: datetime
+    created_at: int  # Unix timestamp
+    updated_at: int  # Unix timestamp
 
-    @classmethod
-    def from_proto(cls, proto) -> "Project":
-        """Создать из protobuf сообщения."""
-        return cls(
-            id=proto.id,
-            name=proto.name,
-            path=proto.path,
-            file_gateway_id=proto.file_gateway_id,
-            created_at=datetime.fromtimestamp(proto.created_at),
-            modified_at=datetime.fromtimestamp(proto.modified_at),
-        )
+    @property
+    def created_datetime(self) -> datetime:
+        """Дата создания."""
+        return datetime.fromtimestamp(self.created_at)
+
+    @property
+    def updated_datetime(self) -> datetime:
+        """Дата обновления."""
+        return datetime.fromtimestamp(self.updated_at)
 
 
 @dataclass(frozen=True)
@@ -159,3 +156,7 @@ class AppState:
     # Информация о сервисах
     engine_info: Optional[EngineInfo] = None
     storage_info: Optional[StorageInfo] = None
+
+    # Навигация по файловой системе
+    current_browsed_path: str = ""
+    browsed_entries: tuple = field(default_factory=tuple)
