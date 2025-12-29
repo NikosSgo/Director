@@ -1,0 +1,82 @@
+syntax = "proto3";
+
+package director;
+
+// Сервис управления проектами и обработки видео
+// Файловые операции перенесены в FileGateway
+service ProjectService {
+    // Получить список всех проектов
+    rpc ListProjects(ListProjectsRequest) returns (ListProjectsResponse);
+    
+    // Зарегистрировать новый проект (после создания структуры через FileGateway)
+    rpc RegisterProject(RegisterProjectRequest) returns (RegisterProjectResponse);
+    
+    // Открыть существующий проект
+    rpc OpenProject(OpenProjectRequest) returns (OpenProjectResponse);
+    
+    // Удалить проект из списка
+    rpc UnregisterProject(UnregisterProjectRequest) returns (UnregisterProjectResponse);
+    
+    // Получить информацию о движке
+    rpc GetEngineInfo(GetEngineInfoRequest) returns (GetEngineInfoResponse);
+}
+
+// Информация о движке
+message GetEngineInfoRequest {}
+
+message GetEngineInfoResponse {
+    string engine_id = 1;
+    string version = 2;
+    repeated string supported_formats = 3;  // Поддерживаемые форматы видео
+}
+
+// Информация о проекте
+message ProjectInfo {
+    string id = 1;
+    string name = 2;
+    string path = 3;               // Путь к проекту (на FileGateway)
+    string file_gateway_id = 4;    // ID хранилища где находится проект
+    int64 created_at = 5;          // Unix timestamp
+    int64 modified_at = 6;         // Unix timestamp
+}
+
+// Запросы и ответы для ListProjects
+message ListProjectsRequest {}
+
+message ListProjectsResponse {
+    repeated ProjectInfo projects = 1;
+}
+
+// Запросы и ответы для RegisterProject
+message RegisterProjectRequest {
+    string name = 1;
+    string path = 2;               // Путь к проекту (должен существовать)
+    string file_gateway_id = 3;    // ID хранилища
+}
+
+message RegisterProjectResponse {
+    bool success = 1;
+    string error_message = 2;
+    ProjectInfo project = 3;
+}
+
+// Запросы и ответы для OpenProject
+message OpenProjectRequest {
+    string project_id = 1;
+}
+
+message OpenProjectResponse {
+    bool success = 1;
+    string error_message = 2;
+    ProjectInfo project = 3;
+}
+
+// Запросы и ответы для UnregisterProject
+message UnregisterProjectRequest {
+    string project_id = 1;
+}
+
+message UnregisterProjectResponse {
+    bool success = 1;
+    string error_message = 2;
+}

@@ -1,0 +1,170 @@
+syntax = "proto3";
+
+package file_gateway;
+
+// Сервис управления файлами и хранилищем
+service FileGateway {
+    // === Информация о сервере ===
+    
+    // Получить информацию о файловом сервере
+    rpc GetStorageInfo(GetStorageInfoRequest) returns (GetStorageInfoResponse);
+
+    // === Навигация по файловой системе ===
+    
+    // Получить содержимое директории
+    rpc BrowseDirectory(BrowseDirectoryRequest) returns (BrowseDirectoryResponse);
+    
+    // Создать директорию
+    rpc CreateDirectory(CreateDirectoryRequest) returns (CreateDirectoryResponse);
+    
+    // Удалить файл или директорию
+    rpc Delete(DeleteRequest) returns (DeleteResponse);
+
+    // === Загрузка и скачивание файлов ===
+    
+    // Загрузить файл на сервер (стриминг)
+    rpc UploadFile(stream UploadFileRequest) returns (UploadFileResponse);
+    
+    // Скачать файл с сервера (стриминг)
+    rpc DownloadFile(DownloadFileRequest) returns (stream DownloadFileResponse);
+    
+    // Получить метаданные файла
+    rpc GetFileInfo(GetFileInfoRequest) returns (GetFileInfoResponse);
+
+    // === Работа с проектами ===
+    
+    // Инициализировать структуру проекта
+    rpc InitProjectStructure(InitProjectStructureRequest) returns (InitProjectStructureResponse);
+}
+
+// ============ Информация о хранилище ============
+
+message GetStorageInfoRequest {}
+
+message GetStorageInfoResponse {
+    string storage_id = 1;            // Уникальный ID хранилища
+    string hostname = 2;              // Имя хоста
+    string os = 3;                    // Операционная система
+    string home_directory = 4;        // Домашняя директория
+    string default_projects_path = 5; // Путь по умолчанию для проектов
+    repeated string root_paths = 6;   // Доступные корневые пути (диски/точки монтирования)
+    uint64 total_space = 7;           // Общий размер хранилища (байты)
+    uint64 free_space = 8;            // Свободное место (байты)
+}
+
+// ============ Навигация ============
+
+message BrowseDirectoryRequest {
+    string path = 1;  // Путь для просмотра (пустой = домашняя директория)
+}
+
+message DirectoryEntry {
+    string name = 1;
+    string path = 2;
+    bool is_directory = 3;
+    uint64 size = 4;          // Размер в байтах
+    int64 created_at = 5;     // Unix timestamp
+    int64 modified_at = 6;    // Unix timestamp
+    string mime_type = 7;     // MIME тип для файлов
+}
+
+message BrowseDirectoryResponse {
+    bool success = 1;
+    string error_message = 2;
+    string current_path = 3;
+    string parent_path = 4;
+    repeated DirectoryEntry entries = 5;
+}
+
+message CreateDirectoryRequest {
+    string path = 1;
+    bool create_parents = 2;  // Создавать родительские директории
+}
+
+message CreateDirectoryResponse {
+    bool success = 1;
+    string error_message = 2;
+    string created_path = 3;
+}
+
+message DeleteRequest {
+    string path = 1;
+    bool recursive = 2;  // Для директорий - удалять содержимое
+}
+
+message DeleteResponse {
+    bool success = 1;
+    string error_message = 2;
+}
+
+// ============ Загрузка/Скачивание ============
+
+message UploadFileRequest {
+    oneof data {
+        UploadFileMetadata metadata = 1;  // Первое сообщение - метаданные
+        bytes chunk = 2;                   // Последующие - данные файла
+    }
+}
+
+message UploadFileMetadata {
+    string destination_path = 1;  // Куда сохранить файл
+    string filename = 2;          // Имя файла
+    uint64 total_size = 3;        // Общий размер файла
+    bool overwrite = 4;           // Перезаписать если существует
+}
+
+message UploadFileResponse {
+    bool success = 1;
+    string error_message = 2;
+    string file_path = 3;         // Полный путь к сохранённому файлу
+    uint64 bytes_written = 4;
+}
+
+message DownloadFileRequest {
+    string path = 1;
+}
+
+message DownloadFileResponse {
+    oneof data {
+        DownloadFileMetadata metadata = 1;  // Первое сообщение - метаданные
+        bytes chunk = 2;                     // Последующие - данные файла
+    }
+}
+
+message DownloadFileMetadata {
+    string filename = 1;
+    uint64 total_size = 2;
+    string mime_type = 3;
+}
+
+message GetFileInfoRequest {
+    string path = 1;
+}
+
+message GetFileInfoResponse {
+    bool success = 1;
+    string error_message = 2;
+    DirectoryEntry file_info = 3;
+}
+
+// ============ Проекты ============
+
+message InitProjectStructureRequest {
+    string base_path = 1;     // Базовая директория
+    string project_name = 2;  // Название проекта
+}
+
+message InitProjectStructureResponse {
+    bool success = 1;
+    string error_message = 2;
+    string project_path = 3;  // Полный путь к созданному проекту
+    
+    // Пути к поддиректориям
+    string assets_path = 4;
+    string video_path = 5;
+    string audio_path = 6;
+    string images_path = 7;
+    string timeline_path = 8;
+    string exports_path = 9;
+}
+
