@@ -3,7 +3,7 @@
 from typing import Optional
 import uuid
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 from PyQt6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -21,6 +21,7 @@ from app.api import GatewayClient
 from app.components.editor.video_player import VideoPlayer
 from app.components.editor.timeline import Timeline, Clip, TrackType
 from app.components.editor.assets_panel import AssetsPanel, Asset, AssetType
+from app.components.editor.project_data import ProjectData
 from app.models.project import Project
 from app.utils.styles import COLORS
 
@@ -39,9 +40,15 @@ class EditorWidget(QWidget):
         super().__init__(parent)
         self._project = project
         self._gateway = gateway
+        self._project_data = ProjectData(project.path, gateway)
+        self._auto_save_timer = QTimer()
+        self._auto_save_timer.timeout.connect(self._auto_save)
+        self._auto_save_timer.setInterval(30000)  # 30 секунд
+        self._needs_save = False
         
         self._setup_ui()
         self._setup_connections()
+        self._load_project_data()
     
     def _setup_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -237,11 +244,69 @@ class EditorWidget(QWidget):
         
         # Выбор клипа на таймлайне
         self._timeline.clip_selected.connect(self._on_clip_selected)
+        
+        # Изменения для автосохранения
+        self._timeline.clip_changed.connect(self._mark_needs_save)
+        self._timeline.clip_deleted.connect(lambda _: self._mark_needs_save())
+        self._assets_panel.assets_changed.connect(self._mark_needs_save)
+        
+        # Запускаем автосохранение
+        self._auto_save_timer.start()
+    
+    def _load_project_data(self) -> None:
+        """Загрузить данные проекта."""
+        if not self._gateway:
+            return
+        
+        if self._project_data.load():
+            # Загружаем ассеты (без emit чтобы не триггерить автосохранение)
+            assets = self._project_data.get_assets()
+            for asset in assets:
+                self._assets_panel.add_asset(asset, emit_changed=False)
+            
+            # Загружаем клипы
+            clips_data = self._project_data.get_clips()
+            self._timeline.load_clips(clips_data)
+            
+            print(f"[Editor] Loaded {len(assets)} assets, {len(clips_data)} clips")
+    
+    def _mark_needs_save(self) -> None:
+        """Пометить что нужно сохранить."""
+        self._needs_save = True
+    
+    def _auto_save(self) -> None:
+        """Автосохранение проекта."""
+        if self._needs_save:
+            self._save_project()
+            self._needs_save = False
+    
+    def _save_project(self) -> None:
+        """Сохранить проект."""
+        if not self._gateway:
+            return
+        
+        # Сохраняем ассеты
+        self._project_data.set_assets(self._assets_panel._assets)
+        
+        # Сохраняем клипы
+        clips_data = self._timeline.get_clips_data()
+        self._project_data.set_clips(clips_data)
+        
+        if self._project_data.save():
+            print(f"[Editor] Project saved")
+        else:
+            print(f"[Editor] Save failed")
     
     def _add_asset_to_timeline(self, asset: Asset) -> None:
         """Добавить ассет на таймлайн."""
         # Определяем трек
         track_index = 0 if asset.asset_type in (AssetType.VIDEO, AssetType.IMAGE) else 1
+        
+        # Находим конец последнего клипа на треке
+        last_end = 0
+        for clip in self._timeline.get_all_clips():
+            if clip.track_index == track_index:
+                last_end = max(last_end, clip.end_time)
         
         # Создаём клип
         clip = Clip(
@@ -249,16 +314,19 @@ class EditorWidget(QWidget):
             name=asset.name,
             file_path=asset.file_path,
             track_index=track_index,
-            start_time=0,  # TODO: найти свободное место
+            start_time=last_end,  # После последнего клипа
             duration=asset.duration_ms if asset.duration_ms > 0 else 5000,  # 5 сек для изображений
+            in_point=0,
+            out_point=asset.duration_ms if asset.duration_ms > 0 else 5000,
             color=COLORS['accent'] if asset.asset_type == AssetType.VIDEO else COLORS['success'],
         )
         
         self._timeline.add_clip(track_index, clip)
+        self._mark_needs_save()
         
         # Загружаем в плеер если видео
         if asset.asset_type == AssetType.VIDEO:
-            self._video_player.load(asset.file_path)
+            self._video_player.load(asset.local_path or asset.file_path)
     
     def _on_clip_selected(self, clip) -> None:
         """Обработка выбора клипа."""
@@ -282,4 +350,11 @@ class EditorWidget(QWidget):
     @property
     def project(self) -> Project:
         return self._project
+    
+    def cleanup(self) -> None:
+        """Очистка при закрытии."""
+        self._auto_save_timer.stop()
+        if self._needs_save:
+            self._save_project()
+        self._video_player.stop()
 

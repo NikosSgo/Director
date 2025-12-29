@@ -5,7 +5,7 @@ from typing import Optional, List
 from enum import Enum, auto
 
 from PyQt6.QtCore import Qt, pyqtSignal, QRectF, QPointF
-from PyQt6.QtGui import QPainter, QColor, QPen, QBrush, QFont, QMouseEvent, QWheelEvent
+from PyQt6.QtGui import QPainter, QColor, QPen, QBrush, QFont, QMouseEvent, QWheelEvent, QCursor
 from PyQt6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -14,6 +14,8 @@ from PyQt6.QtWidgets import (
     QLabel,
     QPushButton,
     QSizePolicy,
+    QMenu,
+    QInputDialog,
 )
 
 from app.utils.styles import COLORS
@@ -126,11 +128,23 @@ class TimelineRuler(QWidget):
         painter.drawLine(0, self.height() - 1, self.width(), self.height() - 1)
 
 
+class TrimHandle(Enum):
+    """Тип ручки обрезки."""
+    NONE = auto()
+    LEFT = auto()
+    RIGHT = auto()
+
+
 class TimelineTrackWidget(QWidget):
     """Виджет одного трека."""
     
     clip_selected = pyqtSignal(Clip)
     clip_moved = pyqtSignal(Clip, int)  # клип, новая позиция
+    clip_trimmed = pyqtSignal(Clip, int, int)  # клип, новый in_point, новый out_point
+    clip_deleted = pyqtSignal(Clip)  # клип удалён
+    clip_split = pyqtSignal(Clip, int)  # клип, позиция разреза (мс)
+    
+    TRIM_HANDLE_WIDTH = 8  # ширина ручки обрезки в пикселях
     
     def __init__(self, track: Track, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -142,9 +156,18 @@ class TimelineTrackWidget(QWidget):
         self._drag_start_x = 0
         self._drag_clip_start = 0
         
+        # Для обрезки
+        self._trimming = False
+        self._trim_handle = TrimHandle.NONE
+        self._trim_clip: Optional[Clip] = None
+        self._trim_original_start = 0
+        self._trim_original_duration = 0
+        
         self.setFixedHeight(track.height)
         self.setMinimumWidth(200)
         self.setMouseTracking(True)
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._show_context_menu)
     
     def set_zoom(self, zoom: float) -> None:
         self._zoom = zoom
@@ -172,6 +195,70 @@ class TimelineTrackWidget(QWidget):
             if clip_x <= x <= clip_x + clip_width:
                 return clip
         return None
+    
+    def _get_trim_handle(self, x: int, clip: Clip) -> TrimHandle:
+        """Определить ручку обрезки."""
+        clip_x = self._time_to_x(clip.start_time)
+        clip_end_x = self._time_to_x(clip.end_time)
+        
+        if abs(x - clip_x) <= self.TRIM_HANDLE_WIDTH:
+            return TrimHandle.LEFT
+        elif abs(x - clip_end_x) <= self.TRIM_HANDLE_WIDTH:
+            return TrimHandle.RIGHT
+        return TrimHandle.NONE
+    
+    def _show_context_menu(self, pos) -> None:
+        """Контекстное меню для клипа."""
+        clip = self._clip_at(pos.x())
+        if not clip:
+            return
+        
+        self._selected_clip = clip
+        self.clip_selected.emit(clip)
+        self.update()
+        
+        menu = QMenu(self)
+        menu.setStyleSheet(f"""
+            QMenu {{
+                background-color: {COLORS['bg_secondary']};
+                color: {COLORS['text_primary']};
+                border: 1px solid {COLORS['border']};
+                padding: 4px;
+            }}
+            QMenu::item {{
+                padding: 6px 20px;
+            }}
+            QMenu::item:selected {{
+                background-color: {COLORS['bg_hover']};
+            }}
+            QMenu::separator {{
+                height: 1px;
+                background-color: {COLORS['border']};
+                margin: 4px 0;
+            }}
+        """)
+        
+        # Разрезать здесь
+        split_action = menu.addAction("✂ Разрезать здесь")
+        split_pos = self._x_to_time(pos.x())
+        split_action.triggered.connect(lambda: self.clip_split.emit(clip, split_pos))
+        
+        menu.addSeparator()
+        
+        # Удалить
+        delete_action = menu.addAction("🗑 Удалить")
+        delete_action.triggered.connect(lambda: self._delete_clip(clip))
+        
+        menu.exec(self.mapToGlobal(pos))
+    
+    def _delete_clip(self, clip: Clip) -> None:
+        """Удалить клип."""
+        if clip in self._track.clips:
+            self._track.clips.remove(clip)
+            if self._selected_clip == clip:
+                self._selected_clip = None
+            self.clip_deleted.emit(clip)
+            self.update()
     
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
@@ -217,34 +304,131 @@ class TimelineTrackWidget(QWidget):
     
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
-            clip = self._clip_at(int(event.position().x()))
+            x = int(event.position().x())
+            clip = self._clip_at(x)
+            
             if clip:
                 self._selected_clip = clip
-                self._dragging = True
-                self._drag_start_x = int(event.position().x())
-                self._drag_clip_start = clip.start_time
                 self.clip_selected.emit(clip)
+                
+                # Проверяем ручки обрезки
+                handle = self._get_trim_handle(x, clip)
+                if handle != TrimHandle.NONE:
+                    self._trimming = True
+                    self._trim_handle = handle
+                    self._trim_clip = clip
+                    self._trim_original_start = clip.start_time
+                    self._trim_original_duration = clip.duration
+                    self._drag_start_x = x
+                else:
+                    # Обычное перетаскивание
+                    self._dragging = True
+                    self._drag_start_x = x
+                    self._drag_clip_start = clip.start_time
+                
                 self.update()
     
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        x = int(event.position().x())
+        
+        # Обновляем курсор
+        clip = self._clip_at(x)
+        if clip:
+            handle = self._get_trim_handle(x, clip)
+            if handle != TrimHandle.NONE:
+                self.setCursor(QCursor(Qt.CursorShape.SizeHorCursor))
+            else:
+                self.setCursor(QCursor(Qt.CursorShape.OpenHandCursor))
+        else:
+            self.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
+        
+        # Обрезка
+        if self._trimming and self._trim_clip:
+            dx_time = self._x_to_time(x) - self._x_to_time(self._drag_start_x)
+            
+            if self._trim_handle == TrimHandle.LEFT:
+                # Обрезка слева - меняем start_time и duration
+                new_start = max(0, self._trim_original_start + dx_time)
+                duration_change = self._trim_original_start - new_start
+                new_duration = max(500, self._trim_original_duration + duration_change)  # мин 0.5 сек
+                
+                # Обновляем клип в треке
+                for i, c in enumerate(self._track.clips):
+                    if c.id == self._trim_clip.id:
+                        self._track.clips[i] = Clip(
+                            id=c.id,
+                            name=c.name,
+                            file_path=c.file_path,
+                            track_index=c.track_index,
+                            start_time=new_start,
+                            duration=new_duration,
+                            in_point=c.in_point + (self._trim_original_start - new_start),
+                            out_point=c.out_point,
+                            color=c.color,
+                        )
+                        self._trim_clip = self._track.clips[i]
+                        break
+                        
+            elif self._trim_handle == TrimHandle.RIGHT:
+                # Обрезка справа - меняем только duration
+                new_duration = max(500, self._trim_original_duration + dx_time)  # мин 0.5 сек
+                
+                for i, c in enumerate(self._track.clips):
+                    if c.id == self._trim_clip.id:
+                        self._track.clips[i] = Clip(
+                            id=c.id,
+                            name=c.name,
+                            file_path=c.file_path,
+                            track_index=c.track_index,
+                            start_time=c.start_time,
+                            duration=new_duration,
+                            in_point=c.in_point,
+                            out_point=c.in_point + new_duration,
+                            color=c.color,
+                        )
+                        self._trim_clip = self._track.clips[i]
+                        break
+            
+            self.update()
+            return
+        
+        # Перетаскивание
         if self._dragging and self._selected_clip:
-            dx = int(event.position().x()) - self._drag_start_x
+            dx = x - self._drag_start_x
             new_time = max(0, self._drag_clip_start + self._x_to_time(dx) - self._x_to_time(0))
-            self._selected_clip = Clip(
-                id=self._selected_clip.id,
-                name=self._selected_clip.name,
-                file_path=self._selected_clip.file_path,
-                track_index=self._selected_clip.track_index,
-                start_time=new_time,
-                duration=self._selected_clip.duration,
-                color=self._selected_clip.color,
-            )
+            
+            # Обновляем клип в треке
+            for i, c in enumerate(self._track.clips):
+                if c.id == self._selected_clip.id:
+                    self._track.clips[i] = Clip(
+                        id=c.id,
+                        name=c.name,
+                        file_path=c.file_path,
+                        track_index=c.track_index,
+                        start_time=new_time,
+                        duration=c.duration,
+                        in_point=c.in_point,
+                        out_point=c.out_point,
+                        color=c.color,
+                    )
+                    self._selected_clip = self._track.clips[i]
+                    break
             self.update()
     
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
-        if self._dragging and self._selected_clip:
+        if self._trimming and self._trim_clip:
+            self.clip_trimmed.emit(
+                self._trim_clip,
+                self._trim_clip.in_point,
+                self._trim_clip.out_point
+            )
+        elif self._dragging and self._selected_clip:
             self.clip_moved.emit(self._selected_clip, self._selected_clip.start_time)
+        
         self._dragging = False
+        self._trimming = False
+        self._trim_handle = TrimHandle.NONE
+        self._trim_clip = None
 
 
 class Timeline(QWidget):
@@ -252,6 +436,8 @@ class Timeline(QWidget):
     
     position_changed = pyqtSignal(int)  # мс
     clip_selected = pyqtSignal(object)  # Clip or None
+    clip_deleted = pyqtSignal(object)  # Clip
+    clip_changed = pyqtSignal()  # any clip changed (for auto-save)
     
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -397,10 +583,65 @@ class Timeline(QWidget):
         track_widget = TimelineTrackWidget(track)
         track_widget.set_zoom(self._zoom)
         track_widget.clip_selected.connect(lambda c: self.clip_selected.emit(c))
+        track_widget.clip_deleted.connect(self._on_clip_deleted)
+        track_widget.clip_split.connect(self._on_clip_split)
+        track_widget.clip_moved.connect(lambda c, t: self.clip_changed.emit())
+        track_widget.clip_trimmed.connect(lambda c, i, o: self.clip_changed.emit())
         self._track_widgets.append(track_widget)
         self._tracks_layout.addWidget(track_widget)
         
         return track
+    
+    def _on_clip_deleted(self, clip: Clip) -> None:
+        """Обработка удаления клипа."""
+        self.clip_deleted.emit(clip)
+        self.clip_changed.emit()
+    
+    def _on_clip_split(self, clip: Clip, split_time: int) -> None:
+        """Разрезать клип в указанной позиции."""
+        # Находим трек с клипом
+        for track_idx, track in enumerate(self._tracks):
+            for i, c in enumerate(track.clips):
+                if c.id == clip.id:
+                    # Проверяем что разрез внутри клипа
+                    if clip.start_time < split_time < clip.end_time:
+                        # Создаём два новых клипа
+                        first_duration = split_time - clip.start_time
+                        second_duration = clip.duration - first_duration
+                        
+                        # Первая часть (изменяем оригинал)
+                        first_clip = Clip(
+                            id=clip.id,
+                            name=clip.name,
+                            file_path=clip.file_path,
+                            track_index=clip.track_index,
+                            start_time=clip.start_time,
+                            duration=first_duration,
+                            in_point=clip.in_point,
+                            out_point=clip.in_point + first_duration,
+                            color=clip.color,
+                        )
+                        
+                        # Вторая часть (новый клип)
+                        second_clip = Clip(
+                            id=f"{clip.id}_split",
+                            name=f"{clip.name} (2)",
+                            file_path=clip.file_path,
+                            track_index=clip.track_index,
+                            start_time=split_time,
+                            duration=second_duration,
+                            in_point=clip.in_point + first_duration,
+                            out_point=clip.out_point,
+                            color=clip.color,
+                        )
+                        
+                        # Заменяем и добавляем
+                        track.clips[i] = first_clip
+                        track.clips.insert(i + 1, second_clip)
+                        
+                        self._track_widgets[track_idx].update()
+                        self.clip_changed.emit()
+                    return
     
     def add_clip(self, track_index: int, clip: Clip) -> None:
         """Добавить клип на трек."""
@@ -433,4 +674,79 @@ class Timeline(QWidget):
             event.accept()
         else:
             super().wheelEvent(event)
+    
+    def get_all_clips(self) -> List[Clip]:
+        """Получить все клипы со всех треков."""
+        clips = []
+        for track in self._tracks:
+            clips.extend(track.clips)
+        return clips
+    
+    def remove_clip(self, clip_id: str) -> None:
+        """Удалить клип по ID."""
+        for track_idx, track in enumerate(self._tracks):
+            for clip in track.clips:
+                if clip.id == clip_id:
+                    track.clips.remove(clip)
+                    self._track_widgets[track_idx].update()
+                    self.clip_changed.emit()
+                    return
+    
+    def clear_tracks(self) -> None:
+        """Очистить все треки."""
+        for track in self._tracks:
+            track.clips.clear()
+        for widget in self._track_widgets:
+            widget.update()
+    
+    def load_clips(self, clips_data: List[dict]) -> None:
+        """Загрузить клипы из данных."""
+        self.clear_tracks()
+        
+        for data in clips_data:
+            try:
+                track_idx = data.get("track_index", 0)
+                
+                # Убеждаемся что трек существует
+                while len(self._tracks) <= track_idx:
+                    track_type = TrackType.VIDEO if track_idx % 2 == 0 else TrackType.AUDIO
+                    self.add_track(f"Track {track_idx + 1}", track_type)
+                
+                clip = Clip(
+                    id=data["id"],
+                    name=data["name"],
+                    file_path=data["file_path"],
+                    track_index=track_idx,
+                    start_time=data.get("start_time", 0),
+                    duration=data.get("duration", 1000),
+                    in_point=data.get("in_point", 0),
+                    out_point=data.get("out_point", 0),
+                    color=data.get("color", COLORS['accent']),
+                )
+                
+                self._tracks[track_idx].clips.append(clip)
+                
+            except (KeyError, ValueError) as e:
+                print(f"[Timeline] Clip load error: {e}")
+        
+        # Обновляем виджеты
+        for widget in self._track_widgets:
+            widget.update()
+    
+    def get_clips_data(self) -> List[dict]:
+        """Получить данные клипов для сохранения."""
+        clips_data = []
+        for clip in self.get_all_clips():
+            clips_data.append({
+                "id": clip.id,
+                "name": clip.name,
+                "file_path": clip.file_path,
+                "track_index": clip.track_index,
+                "start_time": clip.start_time,
+                "duration": clip.duration,
+                "in_point": clip.in_point,
+                "out_point": clip.out_point,
+                "color": clip.color,
+            })
+        return clips_data
 

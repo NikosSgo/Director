@@ -256,6 +256,7 @@ class AssetsPanel(QWidget):
     
     asset_selected = pyqtSignal(object)  # Asset
     asset_double_clicked = pyqtSignal(object)  # Asset - добавить на таймлайн
+    assets_changed = pyqtSignal()  # ассеты изменились (для автосохранения)
     
     def __init__(
         self,
@@ -404,10 +405,12 @@ class AssetsPanel(QWidget):
         """Установить путь к проекту."""
         self._project_path = path
     
-    def add_asset(self, asset: Asset) -> None:
+    def add_asset(self, asset: Asset, emit_changed: bool = True) -> None:
         """Добавить ассет."""
         self._assets.append(asset)
         self._update_lists()
+        if emit_changed:
+            self.assets_changed.emit()
     
     def _update_lists(self) -> None:
         """Обновить все списки."""
@@ -578,3 +581,4 @@ class AssetsPanel(QWidget):
         if reply == QMessageBox.StandardButton.Yes:
             self._assets = [a for a in self._assets if a.id != asset.id]
             self._update_lists()
+            self.assets_changed.emit()
